@@ -4,10 +4,11 @@ import os
 from telethon import TelegramClient, events, Button
 from telethon.errors import SessionPasswordNeededError, FloodWaitError
 from telethon.tl.types import User
+from aiohttp import web
 
 # Configuration
-API_ID = '32882051'  # Get from my.telegram.org
-API_HASH = 'e4a6bb647206b2c37fbcfd0231e083a8'  # Get from my.telegram.org
+API_ID = '32882051'
+API_HASH = 'e4a6bb647206b2c37fbcfd0231e083a8'
 SESSION_NAME = 'forwarder_session'
 DATA_FILE = 'channels_data.json'
 
@@ -18,8 +19,8 @@ class ChannelForwarder:
         self.monitored_channels = set(self.data.get('channels', []))
         self.dump_channel = self.data.get('dump_channel', None)
         self.me = None
-        self.pending_forwards = []  # Queue for failed forwards
-        self.bulk_forward_queue = []  # Queue for bulk forwards
+        self.pending_forwards = []
+        self.bulk_forward_queue = []
         self.bulk_in_progress = False
         
     def load_data(self):
@@ -47,10 +48,8 @@ class ChannelForwarder:
         
         # Check if already authorized
         if not await self.client.is_user_authorized():
-            # Start conversation with yourself for authentication
             await self.client.send_message('me', '🤖 **Channel Forwarder Bot**\n\nPlease authenticate to start.')
             
-            # Get the conversation
             async with self.client.conversation('me') as conv:
                 await conv.send_message('Enter your phone number (with country code, e.g., +1234567890):')
                 phone_msg = await conv.get_response()
@@ -89,21 +88,17 @@ class ChannelForwarder:
             f"/status - Bot status"
         )
         
-        # Register message handler for monitored channels
         @self.client.on(events.NewMessage(chats=list(self.monitored_channels)))
         async def message_handler(event):
             await self.forward_message(event)
         
-        # Register command handler (messages from yourself)
         @self.client.on(events.NewMessage(from_users='me', pattern=r'^/'))
         async def command_handler(event):
             await self.handle_command(event)
         
-        # Process any pending forwards
         asyncio.create_task(self.process_pending_forwards())
         asyncio.create_task(self.process_bulk_forwards())
         
-        # Keep the bot running
         await self.client.run_until_disconnected()
     
     async def forward_message(self, event):
@@ -119,14 +114,12 @@ class ChannelForwarder:
         }
         
         try:
-            # Forward the message to dump channel
             await self.client.forward_messages(
                 self.dump_channel,
                 event.message,
                 event.chat_id
             )
         except FloodWaitError as e:
-            # Add to pending queue and wait
             self.pending_forwards.append(forward_data)
             await self.send_message_to_me(
                 f"⏳ **FloodWait detected!**\n"
@@ -134,7 +127,6 @@ class ChannelForwarder:
                 f"Message queued and will be forwarded automatically."
             )
             await asyncio.sleep(e.seconds)
-            # Retry after wait
             await self.retry_forward(forward_data)
         except Exception as e:
             await self.send_message_to_me(f"❌ Error forwarding message from {event.chat_id}: {e}")
@@ -147,7 +139,6 @@ class ChannelForwarder:
                 forward_data['message'],
                 forward_data['chat_id']
             )
-            # Remove from pending if successful
             if forward_data in self.pending_forwards:
                 self.pending_forwards.remove(forward_data)
             await self.send_message_to_me("✅ Queued message forwarded successfully!")
@@ -163,7 +154,7 @@ class ChannelForwarder:
     async def process_pending_forwards(self):
         """Background task to process pending forwards"""
         while True:
-            await asyncio.sleep(10)  # Check every 10 seconds
+            await asyncio.sleep(10)
             if self.pending_forwards and not self.bulk_in_progress:
                 forward_data = self.pending_forwards[0]
                 await self.retry_forward(forward_data)
@@ -171,7 +162,7 @@ class ChannelForwarder:
     async def process_bulk_forwards(self):
         """Background task to process bulk forwards"""
         while True:
-            await asyncio.sleep(5)  # Check every 5 seconds
+            await asyncio.sleep(5)
             if self.bulk_forward_queue and not self.bulk_in_progress:
                 self.bulk_in_progress = True
                 await self.continue_bulk_forward()
@@ -189,7 +180,6 @@ class ChannelForwarder:
         total = task['total']
         
         try:
-            # Forward messages one by one with progress
             while current_index < len(messages):
                 msg = messages[current_index]
                 
@@ -202,7 +192,6 @@ class ChannelForwarder:
                     current_index += 1
                     task['current_index'] = current_index
                     
-                    # Send progress update every 10 messages
                     if current_index % 10 == 0:
                         await self.send_message_to_me(
                             f"📤 **Bulk Forward Progress**\n\n"
@@ -210,7 +199,6 @@ class ChannelForwarder:
                             f"Channel: `{channel_id}`"
                         )
                     
-                    # Small delay to avoid flood
                     await asyncio.sleep(1)
                     
                 except FloodWaitError as e:
@@ -221,7 +209,6 @@ class ChannelForwarder:
                         f"Will resume automatically after wait."
                     )
                     await asyncio.sleep(e.seconds)
-                    # Continue from same message after wait
                     continue
                     
                 except Exception as e:
@@ -233,7 +220,6 @@ class ChannelForwarder:
                     task['current_index'] = current_index
                     continue
             
-            # Completed successfully
             await self.send_message_to_me(
                 f"✅ **Bulk forward completed!**\n\n"
                 f"Total forwarded: {total} messages\n"
@@ -306,7 +292,6 @@ class ChannelForwarder:
     async def add_channel(self, channel_id):
         """Add a channel to monitor"""
         try:
-            # Verify channel exists and user has access
             entity = await self.client.get_entity(channel_id)
             
             if channel_id in self.monitored_channels:
@@ -315,7 +300,6 @@ class ChannelForwarder:
             self.monitored_channels.add(channel_id)
             self.save_data()
             
-            # Re-register handler with updated channels
             self.client.remove_event_handler(self.forward_message)
             
             @self.client.on(events.NewMessage(chats=list(self.monitored_channels)))
@@ -334,7 +318,6 @@ class ChannelForwarder:
             self.monitored_channels.remove(channel_id)
             self.save_data()
             
-            # Re-register handler with updated channels
             self.client.remove_event_handler(self.forward_message)
             
             @self.client.on(events.NewMessage(chats=list(self.monitored_channels)))
@@ -396,7 +379,6 @@ class ChannelForwarder:
             return
         
         try:
-            # Verify channel exists and user has access
             entity = await self.client.get_entity(channel_id)
             channel_name = getattr(entity, 'title', str(channel_id))
             
@@ -406,7 +388,6 @@ class ChannelForwarder:
                 f"Fetching all messages, please wait..."
             )
             
-            # Get all messages from the channel
             messages = []
             async for message in self.client.iter_messages(channel_id):
                 messages.append(message)
@@ -417,7 +398,6 @@ class ChannelForwarder:
                 await event.reply("⚠️ No messages found in this channel.")
                 return
             
-            # Reverse to forward from oldest to newest
             messages.reverse()
             
             await event.reply(
@@ -427,7 +407,6 @@ class ChannelForwarder:
                 f"This may take a while. You'll get progress updates every 10 messages."
             )
             
-            # Add to bulk forward queue
             self.bulk_forward_queue.append({
                 'channel_id': channel_id,
                 'messages': messages,
@@ -446,9 +425,33 @@ class ChannelForwarder:
         except Exception as e:
             await event.reply(f"❌ **Error starting bulk forward**\n\n{e}")
 
+
+# Health check server for Render
+async def health_check(request):
+    return web.Response(text="Bot is running! ✅")
+
+async def start_health_server():
+    """Start HTTP server for Render health checks"""
+    app = web.Application()
+    app.router.add_get('/', health_check)
+    app.router.add_get('/health', health_check)
+    
+    port = int(os.environ.get('PORT', 10000))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    print(f"✅ Health check server running on port {port}")
+
+
 async def main():
+    # Start health check server for Render
+    await start_health_server()
+    
+    # Start the bot
     bot = ChannelForwarder()
     await bot.start()
+
 
 if __name__ == '__main__':
     asyncio.run(main())
